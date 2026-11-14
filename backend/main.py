@@ -45,6 +45,7 @@ app.add_middleware(
         "http://localhost:5177",
         "http://localhost:5178",
         "http://localhost:5179",
+        "https://ai-job-tracker-gold-seven.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
