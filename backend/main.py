@@ -1,8 +1,9 @@
 
 import os
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from supabase import create_client
 from dotenv import load_dotenv
@@ -14,6 +15,7 @@ load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_PUBLISHABLE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 
@@ -21,12 +23,17 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("Supabase credentials are missing from .env")
 
+if not SUPABASE_PUBLISHABLE_KEY:
+    raise RuntimeError("Supabase publishable key is missing from .env")
+
 if not GROQ_API_KEY:
     raise RuntimeError("Groq API key is missing from .env")
 
 
-# Initialize clients
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Supabase client used to verify login tokens
+auth_verifier = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Groq AI client
 groq_client = Groq(api_key=GROQ_API_KEY)
 
 
@@ -53,6 +60,52 @@ app.add_middleware(
 )
 
 
+# Authentication
+security = HTTPBearer()
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    token = credentials.credentials
+
+    try:
+        response = auth_verifier.auth.get_user(token)
+
+        if not response.user:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid login session"
+            )
+
+        return {
+            "id": str(response.user.id),
+            "email": response.user.email
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired login token"
+        )
+
+
+# Create a database client for the logged-in user
+def get_user_supabase(token: str):
+    client = create_client(
+        SUPABASE_URL,
+        SUPABASE_PUBLISHABLE_KEY
+    )
+
+    # Forward the user's JWT so database RLS policies apply
+    client.postgrest.auth(token)
+
+    return client
+
+
 # Request models
 class JobApplication(BaseModel):
     company: str
@@ -71,7 +124,7 @@ class InterviewRequest(BaseModel):
     job_description: str
 
 
-# Home endpoint
+# Home endpoint (public)
 @app.get("/")
 def home():
     return {
@@ -79,33 +132,48 @@ def home():
     }
 
 
-# Get all applications
+# Get applications belonging to the logged-in user
 @app.get("/applications")
-def get_applications():
+def get_applications(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    current_user: dict = Depends(get_current_user)
+):
     try:
+        client = get_user_supabase(credentials.credentials)
+
         response = (
-            supabase.table("applications")
+            client.table("applications")
             .select("*")
+            .eq("user_id", current_user["id"])
             .order("id")
             .execute()
         )
 
         return response.data
 
-    except Exception as error:
+    except Exception:
         raise HTTPException(
             status_code=500,
-            detail=f"Could not fetch applications: {str(error)}"
+            detail="Could not fetch applications"
         )
 
 
-# Add application
+# Add an application for the logged-in user
 @app.post("/applications")
-def add_application(application: JobApplication):
+def add_application(
+    application: JobApplication,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    current_user: dict = Depends(get_current_user)
+):
     try:
+        client = get_user_supabase(credentials.credentials)
+
+        application_data = application.model_dump()
+        application_data["user_id"] = current_user["id"]
+
         response = (
-            supabase.table("applications")
-            .insert(application.model_dump())
+            client.table("applications")
+            .insert(application_data)
             .execute()
         )
 
@@ -114,24 +182,29 @@ def add_application(application: JobApplication):
             "application": response.data[0]
         }
 
-    except Exception as error:
+    except Exception:
         raise HTTPException(
             status_code=500,
-            detail=f"Could not add application: {str(error)}"
+            detail="Could not add application"
         )
 
 
-# Update application
+# Update only the logged-in user's application
 @app.put("/applications/{application_id}")
 def update_application(
     application_id: int,
-    updated_application: JobApplication
+    updated_application: JobApplication,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    current_user: dict = Depends(get_current_user)
 ):
     try:
+        client = get_user_supabase(credentials.credentials)
+
         response = (
-            supabase.table("applications")
+            client.table("applications")
             .update(updated_application.model_dump())
             .eq("id", application_id)
+            .eq("user_id", current_user["id"])
             .execute()
         )
 
@@ -149,21 +222,28 @@ def update_application(
     except HTTPException:
         raise
 
-    except Exception as error:
+    except Exception:
         raise HTTPException(
             status_code=500,
-            detail=f"Could not update application: {str(error)}"
+            detail="Could not update application"
         )
 
 
-# Delete application
+# Delete only the logged-in user's application
 @app.delete("/applications/{application_id}")
-def delete_application(application_id: int):
+def delete_application(
+    application_id: int,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    current_user: dict = Depends(get_current_user)
+):
     try:
+        client = get_user_supabase(credentials.credentials)
+
         response = (
-            supabase.table("applications")
+            client.table("applications")
             .delete()
             .eq("id", application_id)
+            .eq("user_id", current_user["id"])
             .execute()
         )
 
@@ -180,16 +260,18 @@ def delete_application(application_id: int):
     except HTTPException:
         raise
 
-    except Exception as error:
+    except Exception:
         raise HTTPException(
             status_code=500,
-            detail=f"Could not delete application: {str(error)}"
+            detail="Could not delete application"
         )
 
 
-# Test Groq AI connection
+# Test Groq AI connection (login required)
 @app.get("/test-ai")
-def test_ai():
+def test_ai(
+    current_user: dict = Depends(get_current_user)
+):
     try:
         response = groq_client.chat.completions.create(
             messages=[
@@ -205,16 +287,19 @@ def test_ai():
             "message": response.choices[0].message.content
         }
 
-    except Exception as error:
+    except Exception:
         raise HTTPException(
             status_code=502,
-            detail=f"Groq API error: {str(error)}"
+            detail="Groq API error"
         )
 
 
-# AI Resume Analysis
+# AI Resume Analysis (login required)
 @app.post("/analyze-resume")
-def analyze_resume(request: ResumeAnalysisRequest):
+def analyze_resume(
+    request: ResumeAnalysisRequest,
+    current_user: dict = Depends(get_current_user)
+):
     try:
         prompt = f"""
 You are an expert resume analyzer.
@@ -259,16 +344,19 @@ information provided.
             "analysis": response.choices[0].message.content
         }
 
-    except Exception as error:
+    except Exception:
         raise HTTPException(
             status_code=502,
-            detail=f"Resume analysis failed: {str(error)}"
+            detail="Resume analysis failed"
         )
 
 
-# AI Interview Question Generator
+# AI Interview Question Generator (login required)
 @app.post("/generate-interview-questions")
-def generate_interview_questions(request: InterviewRequest):
+def generate_interview_questions(
+    request: InterviewRequest,
+    current_user: dict = Depends(get_current_user)
+):
     try:
         prompt = f"""
 You are an experienced technical interviewer.
@@ -315,8 +403,8 @@ For coding questions, include correct and understandable solutions.
             "interview_questions": response.choices[0].message.content
         }
 
-    except Exception as error:
+    except Exception:
         raise HTTPException(
             status_code=502,
-            detail=f"Interview generation failed: {str(error)}"
+            detail="Interview generation failed"
         )

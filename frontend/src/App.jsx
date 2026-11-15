@@ -1,16 +1,52 @@
+
 import { useEffect, useState } from 'react'
 import axios from 'axios'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { supabase } from './lib/supabase'
+import Auth from './Auth'
 import './App.css'
 
-const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"
+const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+
 function App() {
   const [activePage, setActivePage] = useState('Dashboard')
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [applications, setApplications] = useState([])
   const [loading, setLoading] = useState(true)
+
+  // Authentication states
+  const [session, setSession] = useState(null)
+  const [authLoading, setAuthLoading] = useState(true)
+
+  // Check the user's login session
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      setAuthLoading(false)
+    })
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+      setAuthLoading(false)
+    })
+
+    return () => {
+      subscription.unsubscribe()
+    }
+  }, [])
+
+  // Attach the logged-in user's access token to API requests
+  function getAuthConfig() {
+    return {
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+    }
+  }
 
   const [formData, setFormData] = useState({
     company: '',
@@ -33,22 +69,56 @@ function App() {
   const [generatingQuestions, setGeneratingQuestions] = useState(false)
   const [interviewError, setInterviewError] = useState('')
 
-  // Fetch applications from FastAPI
+  // Fetch applications only after login
   useEffect(() => {
     async function fetchApplications() {
+      if (!session) {
+        setApplications([])
+        setLoading(false)
+        return
+      }
+
+      setLoading(true)
+
       try {
-        const response = await axios.get(`${API_URL}/applications`)
+        const response = await axios.get(
+          `${API_URL}/applications`,
+          {
+            headers: {
+              Authorization: `Bearer ${session.access_token}`,
+            },
+          }
+        )
+
         setApplications(response.data)
       } catch (error) {
         console.error('Error fetching applications:', error)
-        alert('Could not load applications. Please check the backend.')
+        alert(
+          error.response?.data?.detail ||
+          'Could not load applications. Please check the backend.'
+        )
       } finally {
         setLoading(false)
       }
     }
 
     fetchApplications()
-  }, [])
+  }, [session])
+
+  // Logout
+  async function handleLogout() {
+    const { error } = await supabase.auth.signOut()
+
+    if (error) {
+      alert('Could not log out. Please try again.')
+      console.error('Logout error:', error)
+      return
+    }
+
+    setApplications([])
+    setActivePage('Dashboard')
+    resetForm()
+  }
 
   const menuItems = [
     'Dashboard',
@@ -86,7 +156,8 @@ function App() {
       if (editingId !== null) {
         const response = await axios.put(
           `${API_URL}/applications/${editingId}`,
-          formData
+          formData,
+          getAuthConfig()
         )
 
         if (!response.data.application) {
@@ -104,7 +175,8 @@ function App() {
       } else {
         const response = await axios.post(
           `${API_URL}/applications`,
-          formData
+          formData,
+          getAuthConfig()
         )
 
         setApplications(current => [
@@ -116,7 +188,11 @@ function App() {
       resetForm()
     } catch (error) {
       console.error('Error saving application:', error)
-      alert('Could not save application. Please try again.')
+
+      alert(
+        error.response?.data?.detail ||
+        'Could not save application. Please try again.'
+      )
     }
   }
 
@@ -154,14 +230,21 @@ function App() {
     if (!confirmed) return
 
     try {
-      await axios.delete(`${API_URL}/applications/${id}`)
+      await axios.delete(
+        `${API_URL}/applications/${id}`,
+        getAuthConfig()
+      )
 
       setApplications(current =>
         current.filter(app => app.id !== id)
       )
     } catch (error) {
       console.error('Error deleting application:', error)
-      alert('Could not delete application. Please try again.')
+
+      alert(
+        error.response?.data?.detail ||
+        'Could not delete application. Please try again.'
+      )
     }
   }
 
@@ -179,7 +262,8 @@ function App() {
         {
           resume_text: resumeText,
           job_description: resumeJobDescription,
-        }
+        },
+        getAuthConfig()
       )
 
       setResumeAnalysis(response.data.analysis)
@@ -209,7 +293,8 @@ function App() {
         {
           job_role: interviewRole,
           job_description: interviewDescription,
-        }
+        },
+        getAuthConfig()
       )
 
       setInterviewQuestions(response.data.interview_questions)
@@ -223,6 +308,20 @@ function App() {
     } finally {
       setGeneratingQuestions(false)
     }
+  }
+
+  // Wait while checking authentication
+  if (authLoading) {
+    return (
+      <p className="mt-4 text-center">
+        Checking login...
+      </p>
+    )
+  }
+
+  // Show login/signup when user is not logged in
+  if (!session) {
+    return <Auth />
   }
 
   return (
@@ -260,7 +359,16 @@ function App() {
             </p>
           </div>
 
-          <div className="profile">H</div>
+          <div className="d-flex align-items-center gap-3">
+            <span className="profile">H</span>
+
+            <button
+              className="btn btn-outline-danger btn-sm"
+              onClick={handleLogout}
+            >
+              Logout
+            </button>
+          </div>
         </header>
 
         {loading ? (
@@ -509,15 +617,9 @@ function App() {
                   <div className="mt-4 p-3 border rounded">
                     <h5>Resume Analysis Results</h5>
 
-                    <div
-                      style={{
-                        whiteSpace: 'pre-wrap',
-                        lineHeight: '1.7',
-                        overflowWrap: 'anywhere',
-                      }}
-                    >
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
                       {resumeAnalysis}
-                    </div>
+                    </ReactMarkdown>
                   </div>
                 )}
               </section>
@@ -594,15 +696,9 @@ function App() {
                   <div className="mt-4 p-3 border rounded">
                     <h5>Generated Interview Questions</h5>
 
-                    <div
-                      style={{
-                        whiteSpace: 'pre-wrap',
-                        lineHeight: '1.7',
-                        overflowWrap: 'anywhere',
-                      }}
-                    >
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
                       {interviewQuestions}
-                    </div>
+                    </ReactMarkdown>
                   </div>
                 )}
               </section>
@@ -613,7 +709,6 @@ function App() {
     </div>
   )
 }
-
 
 // Application table component
 function ApplicationTable({ applications, onEdit, onDelete }) {
