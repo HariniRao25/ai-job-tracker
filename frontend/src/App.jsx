@@ -381,7 +381,9 @@ function App() {
           </div>
 
           <div className="d-flex align-items-center gap-3">
-            <span className="profile">H</span>
+            <span className="profile">
+  {session?.user?.email?.charAt(0).toUpperCase() || 'U'}
+</span>
 
             <button
               className="btn btn-outline-danger btn-sm"
