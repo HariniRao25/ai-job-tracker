@@ -5,8 +5,11 @@ import './Auth.css'
 
 function Auth() {
   const [isLogin, setIsLogin] = useState(true)
+  const [isForgotPassword, setIsForgotPassword] = useState(false)
+
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -19,18 +22,37 @@ function Auth() {
     setError('')
 
     try {
-      if (isLogin) {
-        const { error } = await supabase.auth.signInWithPassword({
+      // Password recovery
+      if (isForgotPassword) {
+        const { error } = await supabase.auth.resetPasswordForEmail(
           email,
-          password
-        })
+          {
+            redirectTo: `${window.location.origin}/`,
+          }
+        )
 
         if (error) throw error
 
-      } else {
+        setMessage(
+          'Password reset email sent. Please check your inbox and spam folder.'
+        )
+      }
+
+      // Login
+      else if (isLogin) {
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        })
+
+        if (error) throw error
+      }
+
+      // Signup
+      else {
         const { data, error } = await supabase.auth.signUp({
           email,
-          password
+          password,
         })
 
         if (error) throw error
@@ -51,6 +73,14 @@ function Auth() {
     }
   }
 
+  function switchMode() {
+    setIsLogin(!isLogin)
+    setIsForgotPassword(false)
+    setMessage('')
+    setError('')
+    setPassword('')
+  }
+
   return (
     <div className="auth-container">
       <div className="auth-card">
@@ -62,18 +92,25 @@ function Auth() {
         </p>
 
         <h4>
-          {isLogin ? 'Welcome Back!' : 'Create Your Account'}
+          {isForgotPassword
+            ? 'Reset Your Password'
+            : isLogin
+              ? 'Welcome Back!'
+              : 'Create Your Account'}
         </h4>
 
         <p>
-          {isLogin
-            ? 'Log in to manage your job applications.'
-            : 'Sign up to start tracking your career journey.'}
+          {isForgotPassword
+            ? 'Enter your registered email address to receive a password reset link.'
+            : isLogin
+              ? 'Log in to manage your job applications.'
+              : 'Sign up to start tracking your career journey.'}
         </p>
 
         <form onSubmit={handleSubmit}>
 
           <label>Email Address</label>
+
           <input
             type="email"
             value={email}
@@ -82,49 +119,89 @@ function Auth() {
             required
           />
 
-          <label>Password</label>
-          <input
-            type="password"
-            value={password}
-            onChange={event => setPassword(event.target.value)}
-            placeholder="Enter your password"
-            minLength={8}
-            required
-          />
+          {!isForgotPassword && (
+            <>
+              <label>Password</label>
+
+              <input
+                type="password"
+                value={password}
+                onChange={event => setPassword(event.target.value)}
+                placeholder="Enter your password"
+                minLength={8}
+                required
+              />
+            </>
+          )}
+
+          {isLogin && !isForgotPassword && (
+            <div className="text-end mt-2 mb-3">
+              <button
+                type="button"
+                className="btn btn-link p-0"
+                onClick={() => {
+                  setIsForgotPassword(true)
+                  setMessage('')
+                  setError('')
+                }}
+              >
+                Forgot Password?
+              </button>
+            </div>
+          )}
 
           {error && (
-            <div className="auth-error">{error}</div>
+            <div className="auth-error">
+              {error}
+            </div>
           )}
 
           {message && (
-            <div className="auth-message">{message}</div>
+            <div className="auth-message">
+              {message}
+            </div>
           )}
 
           <button type="submit" disabled={loading}>
             {loading
               ? 'Please wait...'
-              : isLogin
-                ? 'Login'
-                : 'Create Account'}
+              : isForgotPassword
+                ? 'Send Reset Link'
+                : isLogin
+                  ? 'Login'
+                  : 'Create Account'}
           </button>
 
         </form>
 
         <div className="auth-toggle">
-          {isLogin
-            ? "Don't have an account?"
-            : 'Already have an account?'}
 
-          <button
-            type="button"
-            onClick={() => {
-              setIsLogin(!isLogin)
-              setMessage('')
-              setError('')
-            }}
-          >
-            {isLogin ? 'Sign Up' : 'Login'}
-          </button>
+          {isForgotPassword ? (
+            <button
+              type="button"
+              onClick={() => {
+                setIsForgotPassword(false)
+                setMessage('')
+                setError('')
+              }}
+            >
+              Back to Login
+            </button>
+          ) : (
+            <>
+              {isLogin
+                ? "Don't have an account?"
+                : 'Already have an account?'}
+
+              <button
+                type="button"
+                onClick={switchMode}
+              >
+                {isLogin ? 'Sign Up' : 'Login'}
+              </button>
+            </>
+          )}
+
         </div>
 
       </div>

@@ -19,22 +19,34 @@ function App() {
   // Authentication states
   const [session, setSession] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
+  const [isRecoveringPassword, setIsRecoveringPassword] = useState(false)
 
-  // Check the user's login session
+  // Check login session and listen for password recovery
   useEffect(() => {
+    let mounted = true
+
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setAuthLoading(false)
+      if (mounted) {
+        setSession(session)
+        setAuthLoading(false)
+      }
     })
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!mounted) return
+
+      if (event === 'PASSWORD_RECOVERY') {
+        setIsRecoveringPassword(true)
+      }
+
       setSession(session)
       setAuthLoading(false)
     })
 
     return () => {
+      mounted = false
       subscription.unsubscribe()
     }
   }, [])
@@ -72,7 +84,7 @@ function App() {
   // Fetch applications only after login
   useEffect(() => {
     async function fetchApplications() {
-      if (!session) {
+      if (!session || isRecoveringPassword) {
         setApplications([])
         setLoading(false)
         return
@@ -103,7 +115,7 @@ function App() {
     }
 
     fetchApplications()
-  }, [session])
+  }, [session, isRecoveringPassword])
 
   // Logout
   async function handleLogout() {
@@ -316,6 +328,15 @@ function App() {
       <p className="mt-4 text-center">
         Checking login...
       </p>
+    )
+  }
+
+  // Show password reset screen after opening recovery link
+  if (isRecoveringPassword) {
+    return (
+      <ResetPassword
+        onBackToLogin={() => setIsRecoveringPassword(false)}
+      />
     )
   }
 
@@ -706,6 +727,122 @@ function App() {
           </>
         )}
       </main>
+    </div>
+  )
+}
+
+// Password reset component
+function ResetPassword({ onBackToLogin }) {
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+
+  async function handlePasswordUpdate(event) {
+    event.preventDefault()
+
+    setMessage('')
+    setError('')
+
+    if (password.length < 8) {
+      setError('Password must contain at least 8 characters.')
+      return
+    }
+
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.')
+      return
+    }
+
+    setLoading(true)
+
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password,
+      })
+
+      if (error) throw error
+
+      setMessage(
+        'Password updated successfully! You can now log in with your new password.'
+      )
+
+      const { error: signOutError } = await supabase.auth.signOut()
+
+      if (signOutError) {
+        console.error('Sign out after password update:', signOutError)
+      }
+    } catch (err) {
+      setError(err.message || 'Unable to update password.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="auth-container">
+      <div className="auth-card">
+        <h2>CareerTrack</h2>
+
+        <p className="auth-subtitle">
+          Your AI-powered career companion
+        </p>
+
+        <h4>Set New Password</h4>
+
+        <p>Enter and confirm your new password.</p>
+
+        <form onSubmit={handlePasswordUpdate}>
+          <label>New Password</label>
+
+          <input
+            type="password"
+            value={password}
+            onChange={event => setPassword(event.target.value)}
+            placeholder="Enter new password"
+            minLength={8}
+            required
+            disabled={!!message}
+          />
+
+          <label>Confirm New Password</label>
+
+          <input
+            type="password"
+            value={confirmPassword}
+            onChange={event => setConfirmPassword(event.target.value)}
+            placeholder="Confirm new password"
+            minLength={8}
+            required
+            disabled={!!message}
+          />
+
+          {error && (
+            <div className="auth-error">
+              {error}
+            </div>
+          )}
+
+          {message && (
+            <div className="auth-message">
+              {message}
+            </div>
+          )}
+
+          <button type="submit" disabled={loading || !!message}>
+            {loading ? 'Updating...' : 'Update Password'}
+          </button>
+        </form>
+
+        {message && (
+          <div className="auth-toggle">
+            <button type="button" onClick={onBackToLogin}>
+              Back to Login
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
